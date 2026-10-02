@@ -266,9 +266,14 @@ class Simulation:
         seg = self.tactile_reading.normal if self.tactile_reading is not None else None
         self.scope.push(obs.time, targets, obs.q, tau, seg)
 
+    @property
+    def control_due(self) -> bool:
+        """下一次 step_once 会先跑控制链（无界面脚本据此"每个控制周期"做一次事情）。"""
+        return self.data.time >= self._next_control - 1e-12
+
     def step_once(self) -> None:
         """推进一个物理步；到了控制周期就先跑一遍控制链。"""
-        if self.data.time >= self._next_control - 1e-12:
+        if self.control_due:
             self._control_tick()
             self._next_control += self.control_dt
         mujoco.mj_step(self.model, self.data)
