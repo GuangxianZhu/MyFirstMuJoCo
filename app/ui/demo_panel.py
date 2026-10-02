@@ -65,12 +65,21 @@ class DemoPanel(QWidget):
         self._on_choose()
 
     # ------------------------------------------------------------------ 交互
+    def _available(self, factory) -> bool:
+        return not getattr(factory, "needs_object", False) or self.sim.grasp is not None
+
     def _on_choose(self, _=None) -> None:
-        i = self.combo.currentIndex()
-        self.desc.setText(self._factories[i].description)
+        f = self._factories[self.combo.currentIndex()]
+        ok = self._available(f)
+        self.desc.setText(f.description if ok else f.description + "\n\n⚠ 需要 hand_table 场景：python main.py --model app/scenes/hand/hand_table.xml")
+        self.start_btn.setEnabled(ok and self.sim.demo is None)
+        self.start_btn.setToolTip("" if ok else "需要 hand_table 场景")
 
     def _on_start(self) -> None:
-        demo = self._factories[self.combo.currentIndex()]()
+        f = self._factories[self.combo.currentIndex()]
+        if not self._available(f):
+            return
+        demo = f()
         self._shown = demo
         self.summary.setText("")
         self.plot.clear()
@@ -81,7 +90,7 @@ class DemoPanel(QWidget):
     # ------------------------------------------------------------------ 刷新（主窗口每隔几帧调用）
     def refresh(self) -> None:
         running = self.sim.demo
-        self.start_btn.setEnabled(running is None)
+        self.start_btn.setEnabled(running is None and self._available(self._factories[self.combo.currentIndex()]))
         self.stop_btn.setEnabled(running is not None)
         self.combo.setEnabled(running is None)
 

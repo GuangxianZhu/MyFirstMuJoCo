@@ -341,8 +341,9 @@ class FragilePickPlaceDemo(Demo):
         "① 柔顺阻抗、目标力 1.0 N；② 刚硬（≈位置控制）、目标力 3.0 N。看“抓取”页签的握力曲线和判定。"
         "（原计划柔顺用 1.2 N，实测柔顺参数下手指闭合到底拇指最多约 1.1 N，所以改成 1.0 N。）"
     )
-    result_title = "两次试验的总握力（虚线 = 易碎阈值，单指）"
-    result_ylabel = "总握力 (N)"
+    # 曲线画"单指最大力"而不是总握力：易碎阈值是按单指算的，拿总握力（两指之和）和它比会误导
+    result_title = "两次试验的单指最大力（红线 = 易碎阈值）"
+    result_ylabel = "单指最大力 (N)"
     camera = {"azimuth": 135.0, "elevation": -22.0, "distance": 0.55, "lookat": (0.15, -0.02, 0.15)}
     needs_object = True
 
@@ -393,7 +394,7 @@ class FragilePickPlaceDemo(Demo):
             m = gm.metrics()
             ts, fs = self._curves[self.trial]
             ts.append(t - self._t0)
-            fs.append(m["grip_total"])
+            fs.append(m["finger_max"])
             self._finger_peak = max(self._finger_peak, m["finger_max"])
             # 落地冲击：放下阶段物体第一次碰到桌面起 0.3 s 内的物体—桌面法向力峰值
             if seq.state in ("LOWER", "RELEASE", "RETREAT") or self._land_t is not None:

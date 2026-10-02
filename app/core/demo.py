@@ -13,6 +13,7 @@ class Demo:
     title = "演示"
     description = ""
     camera: dict | None = None   # 演示开始时切换到的相机 {azimuth, elevation, distance, lookat}；None = 不动
+    needs_object = False         # True = 需要有物体和抓取指标的场景（sim.grasp 不为 None，例如 hand_table）
 
     def __init__(self):
         self.finished = False
