@@ -85,10 +85,11 @@ def tip_centers(d: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
 def object_width(model: mujoco.MjModel, body: int) -> float:
     """物体在水平面上被捏的宽度（方块：边长；球、圆柱：直径）。"""
     g = next(i for i in range(model.ngeom) if model.geom_bodyid[i] == body)
-    t, size = model.geom_type[g], model.geom_size[g]
-    if t == mujoco.mjtGeom.mjGEOM_BOX:
+    t, size = int(model.geom_type[g]), model.geom_size[g]
+    G = mujoco.mjtGeom
+    if t == int(G.mjGEOM_BOX):
         return 2.0 * float(size[0])
-    if t in (mujoco.mjtGeom.mjGEOM_SPHERE, mujoco.mjtGeom.mjGEOM_CYLINDER, mujoco.mjtGeom.mjGEOM_CAPSULE):
+    if t in (int(G.mjGEOM_SPHERE), int(G.mjGEOM_CYLINDER), int(G.mjGEOM_CAPSULE)):
         return 2.0 * float(size[0])
     raise ValueError(f"不支持的物体形状: geom type {t}")
 
@@ -173,7 +174,7 @@ class PinchGraspSequence:
 
         # 2) 方块转到捏取轴方向（只转绕 z 的角度）
         j = int(m.body_jntadr[self.body])
-        is_box = m.geom_type[next(g for g in range(m.ngeom) if m.geom_bodyid[g] == self.body)] == mujoco.mjtGeom.mjGEOM_BOX
+        is_box = int(m.geom_type[next(g for g in range(m.ngeom) if m.geom_bodyid[g] == self.body)]) == int(mujoco.mjtGeom.mjGEOM_BOX)
         if p.align_object and is_box and j >= 0 and m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE:
             qa = int(m.jnt_qposadr[j])
             d.qpos[qa + 3: qa + 7] = [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
@@ -342,3 +343,95 @@ def run_sequence(sim, seq: PinchGraspSequence, timeout: float = 60.0) -> None:
         if sim.control_due:
             seq.update(sim, sim.time)
         sim.step_once()
+
+
+# ---------------------------------------------------------------------- 水平对齐的捏取姿态族（决策门 G1 第 1 轮）
+IK_JOINTS = ["index_mcp", "index_pip", "index_dip", "thumb_rot", "thumb_cmc", "thumb_mcp", "thumb_ip"]
+
+
+class LevelPinch:
+    """两指尖球心始终等高、中点不动的捏取姿态族：s∈[0,1] 对应开口 a 从 a_max 线性减到 a_min。
+
+    用小 IK（高斯-牛顿、有限差分雅可比、阻尼最小二乘）预先算一张表：变量 = 食指 mcp/pip/dip + 拇指 rot/cmc/mcp/ip，
+    约束 = ① 两指尖球心距离 = a；② 两指尖球心 z 相同；③ 两指尖中点在"水平面内垂直于捏取轴"的方向和竖直方向不动
+    （线性插值闭合时中点一路往掌心方向、往下漂约 3 cm；沿捏取轴的漂移无所谓，等于定位误差沿轴，实测 ±1 cm 都能抓）。
+    中点三个方向全固定在这只手上解不出来（拇指 mcp/ip 顶到限位，残差到 1 cm）。
+    开口逐步减小，每步用上一步的解做初值（连续路径）。
+    """
+
+    name = "水平对齐（IK）"
+
+    def __init__(self, model: mujoco.MjModel, qpos_adr: dict[str, int], a_max: float = 0.08, a_min: float = 0.03,
+                 step: float = 0.005):
+        self.a_values = np.round(np.arange(a_max, a_min - 1e-9, -step), 6)
+        self._lin = LinearPinch()
+        self._m, self._qadr = model, qpos_adr
+        self._d = mujoco.MjData(model)
+        self._lo = np.array([model.jnt_range[model.joint(n).id][0] for n in IK_JOINTS])
+        self._hi = np.array([model.jnt_range[model.joint(n).id][1] for n in IK_JOINTS])
+        self.table, self.residual = self._build()
+
+    # --- IK ---
+    def _tips(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        d = self._d
+        d.qpos[:] = 0.0
+        for k, v in self._lin.pose(0.0).items():          # 其余三指与线性族相同
+            d.qpos[self._qadr[k]] = v
+        for k, v in zip(IK_JOINTS, q):
+            d.qpos[self._qadr[k]] = v
+        mujoco.mj_kinematics(self._m, d)
+        return tip_centers(d)
+
+    def _residual(self, q, a, mid):
+        A, B = self._tips(q)
+        r = [np.linalg.norm(A - B) - a, A[2] - B[2]]
+        if mid is not None:
+            dm = (A + B) / 2.0 - mid
+            r += [float(dm[:2] @ self._perp), float(dm[2])]
+        return np.array(r)
+
+    def _solve(self, q, a, mid, iters=60, lam=1e-3, eps=1e-6):
+        q = q.copy()
+        for _ in range(iters):
+            r = self._residual(q, a, mid)
+            if np.max(np.abs(r)) < 1e-5:
+                break
+            J = np.zeros((r.size, q.size))
+            for j in range(q.size):
+                dq = np.zeros_like(q)
+                dq[j] = eps
+                J[:, j] = (self._residual(q + dq, a, mid) - r) / eps
+            step = -J.T @ np.linalg.solve(J @ J.T + lam * np.eye(r.size), r)
+            q = np.clip(q + step, self._lo, self._hi)
+        return q, self._residual(q, a, mid)
+
+    def _build(self):
+        lin0 = self._lin.pose(0.0)
+        q = np.array([lin0[k] for k in IK_JOINTS])
+        # 第一步只要求开口和等高，得到起始中点；之后中点固定
+        q, r = self._solve(q, float(self.a_values[0]), None)
+        A, B = self._tips(q)
+        mid = (A + B) / 2.0
+        ax = (B - A)[:2] / np.linalg.norm((B - A)[:2])
+        self._perp = np.array([-ax[1], ax[0]])
+        table, res = [], []
+        for a in self.a_values:
+            q, r = self._solve(q, float(a), mid)
+            table.append(q.copy())
+            res.append(r.copy())
+        return np.array(table), res
+
+    def max_dz(self) -> float:
+        """表里每一行两指尖球心的高度差（绝对值）的最大值 (m)。"""
+        return float(max(abs(self._residual(q, 0.0, None)[1]) for q in self.table))
+
+    # --- 姿态族接口 ---
+    def pose(self, s: float) -> dict[str, float]:
+        s = min(max(s, 0.0), 1.0)
+        x = s * (len(self.table) - 1)
+        i = min(int(x), len(self.table) - 2)
+        u = x - i
+        q = self.table[i] * (1.0 - u) + self.table[i + 1] * u
+        pose = {k: v for k, v in self._lin.pose(0.0).items() if k not in IK_JOINTS}
+        pose.update({k: float(v) for k, v in zip(IK_JOINTS, q)})
+        return pose

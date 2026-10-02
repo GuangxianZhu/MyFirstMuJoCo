@@ -9,8 +9,8 @@ GRASP = {"object": "cube", "fragile_limit": None}
 
 
 def _demos():
-    from app.scenes.hand.demos import FragilePickPlaceDemo, ImpedanceCompareDemo
-    return [FragilePickPlaceDemo, ImpedanceCompareDemo]
+    from app.scenes.hand.demos import CompareGraspDemo, FragilePickPlaceDemo, ImpedanceCompareDemo
+    return [FragilePickPlaceDemo, CompareGraspDemo, ImpedanceCompareDemo]
 
 
 def create() -> SceneExtras:

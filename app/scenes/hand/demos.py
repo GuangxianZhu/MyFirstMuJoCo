@@ -472,3 +472,142 @@ class FragilePickPlaceDemo(Demo):
             t_max = max(float(c[1][-1]) for c in out)
             out.append((f"易碎阈值 {self.FRAGILE_LIMIT:.1f} N", np.array([0.0, t_max]), np.array([self.FRAGILE_LIMIT] * 2)))
         return out
+
+
+# ====================================================================== 演示 4：位置控制 vs 阻抗控制抓球
+class CompareGraspDemo(Demo):
+    key = "compare"
+    title = "抓取：位置控制 vs 阻抗控制抓球"
+    description = (
+        "同一套捏取动作、同样的目标力 1.5 N，只换手指的控制刚度：位置式（刚硬 K×5）和阻抗式（柔顺 K×0.5）。"
+        "每组再故意把手腕目标沿捏取轴偏 0 / 4 / 8 mm（模拟定位误差），共 6 次。"
+        "记录闭合时的冲击力峰值、稳态握力、球被推开的距离、抬起时的判定。"
+        "（原计划若球捏不稳就换圆柱；实测有了静摩擦求解后球能稳定捏起，圆柱反而没更好，所以保留球，见附录 A。）"
+    )
+    result_title = "偏 8 mm 时两组的总握力（以开始闭合为 0 点）"
+    result_ylabel = "总握力 (N)"
+    camera = {"azimuth": 150.0, "elevation": -20.0, "distance": 0.42, "lookat": (0.03, -0.10, 0.13)}
+    needs_object = True
+
+    OBJECT = "ball"
+    F_TARGET = 1.5
+    LIFT = 0.06              # 抓牢要求抬升 ≥ 5 cm，抬 6 cm 才有余量
+    GROUPS = [("位置式（刚硬）", 2), ("阻抗式（柔顺）", 0)]
+    ERRORS = [0.0, 0.004, 0.008]
+
+    def __init__(self):
+        super().__init__()
+        self.trials = [(g, p, e) for e in self.ERRORS for g, p in self.GROUPS]   # 两组交替：同一误差下前后对比
+        self.results: list[dict] = []
+        self._curves: list[tuple[list[float], list[float]]] = [([], []) for _ in self.trials]
+        self.trial = 0
+        self.phase = "TRIAL"
+        self.seq = None
+
+    def setup(self, sim) -> None:
+        self._default_object = sim.grasp.object_name if sim.grasp else None
+        self._default_limit = sim.grasp.fragile_limit if sim.grasp else None
+        sim.set_grasp_object(self.OBJECT)
+        self._start_trial(sim, 0, 0.0)
+
+    def _start_trial(self, sim, i: int, t: float) -> None:
+        from app.scenes.hand.grasp_sequence import PinchGraspSequence, PinchParams
+        self.trial, self.phase = i, "TRIAL"
+        _, preset, e = self.trials[i]
+        _, ks, ds, lim = PRESETS[preset]
+        sim.drive.apply_preset(ks, ds, lim)
+        self.seq = PinchGraspSequence()
+        self.seq.start(sim, self.OBJECT, PinchParams(F_target=self.F_TARGET, lift=self.LIFT, offset=e), t=t)
+        self._t0 = t
+        self._p0 = np.array(sim.grasp.metrics()["obj_pos"][:2])
+        self._impact = 0.0
+        self._push = 0.0
+        self._settle: list[tuple[float, float]] = []
+
+    def update(self, sim, t: float) -> None:
+        if self.phase == "WAIT":
+            if t - self._wait_t0 >= 0.3:
+                sim.reset_object(self.OBJECT)
+                self._start_trial(sim, self.trial + 1, t)
+            return
+        seq = self.seq
+        seq.update(sim, t)
+        m = sim.grasp.metrics()
+        if seq.state in ("CLOSE", "SETTLE"):
+            t_close = seq.entered("CLOSE")
+            ts, fs = self._curves[self.trial]
+            ts.append(t - t_close)
+            fs.append(m["grip_total"])
+            self._impact = max(self._impact, m["grip_total"])
+            if seq.state == "CLOSE":
+                self._push = max(self._push, float(np.linalg.norm(np.array(m["obj_pos"][:2]) - self._p0)))
+            else:
+                self._settle.append((t, m["grip_total"]))
+        if seq.finished:
+            self._record(sim)
+            if self.trial + 1 < len(self.trials):
+                self.phase, self._wait_t0 = "WAIT", t
+            else:
+                self.finished = True
+
+    def _record(self, sim) -> None:
+        seq = self.seq
+        name, _, e = self.trials[self.trial]
+        if self._settle:
+            t_end = self._settle[-1][0]
+            steady = float(np.mean([f for tt, f in self._settle if tt >= t_end - 0.2]))
+        else:
+            steady = 0.0
+        lifted = seq.lift_end_state is not None and seq.entered("CARRY") is not None
+        self.results.append({
+            "group": name, "error": e,
+            "impact_peak": self._impact,
+            "steady_force": steady,
+            "push_away": self._push,
+            "final_state": seq.lift_end_state or "未抬起",
+            "lifted": lifted,
+            "failed": seq.failed,
+        })
+
+    def teardown(self, sim) -> None:
+        sim.drive.reset()
+        sim.reset_object(self.OBJECT)
+        if self._default_object:
+            sim.set_grasp_object(self._default_object, self._default_limit)
+
+    # --- 结果 ---
+    def progress(self) -> str:
+        name, _, e = self.trials[self.trial]
+        stage = "物体放回原处" if self.phase == "WAIT" else (self.seq.label if self.seq else "")
+        return f"第 {self.trial + 1}/{len(self.trials)} 次：{name}，偏 {e * 1000:.0f} mm    阶段：{stage}"
+
+    def _row(self, r: dict) -> str:
+        why = f"（{r['failed']}）" if r["failed"] and not r["lifted"] else ""
+        return (f"{r['group']} 偏 {r['error'] * 1000:.0f} mm：冲击峰值 {r['impact_peak']:.2f} N，稳态 {r['steady_force']:.2f} N，"
+                f"推开 {r['push_away'] * 1000:.1f} mm，抬起时判定“{r['final_state']}”{why}")
+
+    def conclusion(self) -> str:
+        """一句话总结：只写测到的事实（偏 8 mm 时两组推开的距离和冲击力）。"""
+        by = {(r["group"], round(r["error"] * 1000)): r for r in self.results}
+        stiff, soft = self.GROUPS[0][0], self.GROUPS[1][0]
+        a, b = by.get((stiff, 8)), by.get((soft, 8))
+        if not (a and b):
+            return ""
+        more = "刚硬" if a["push_away"] > b["push_away"] else "柔顺"
+        return (f"偏 8 mm 时：刚硬把球推开 {a['push_away'] * 1000:.1f} mm、冲击峰值 {a['impact_peak']:.2f} N；"
+                f"柔顺推开 {b['push_away'] * 1000:.1f} mm、冲击峰值 {b['impact_peak']:.2f} N（{more}推得更远）。"
+                f"两组抬起成功 {sum(r['lifted'] for r in self.results if r['group'] == stiff)}/3 与 "
+                f"{sum(r['lifted'] for r in self.results if r['group'] == soft)}/3。")
+
+    def summary(self) -> str:
+        lines = [self._row(r) for r in self.results]
+        c = self.conclusion()
+        return "\n".join(lines + ([c] if c else []))
+
+    def result_curves(self):
+        out = []
+        for i, (name, _, e) in enumerate(self.trials):
+            t, f = self._curves[i]
+            if t and abs(e - 0.008) < 1e-9:
+                out.append((name, np.array(t), np.array(f)))
+        return out
