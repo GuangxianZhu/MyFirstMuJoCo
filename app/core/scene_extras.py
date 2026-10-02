@@ -34,6 +34,7 @@ class SceneExtras:
     impedance: dict | None = None                                   # 力矩关节的阻抗默认值: k / d / tau_limit
     tactile_segments: list[str] | None = None                       # 触觉段对应的刚体名（掌心、各指节）
     demos: list[Callable[[], Demo]] = field(default_factory=list)   # 演示工厂（每次运行新建一个实例）
+    grasp: dict | None = None                                       # 抓取指标配置 {"object": 刚体名, "fragile_limit": N 或 None}
 
 
 def load_extras(xml_path: str | Path) -> SceneExtras | None:
