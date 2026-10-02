@@ -1,0 +1,66 @@
+<mujoco model="arm3">
+  <!-- 3 自由度机械臂：底座旋转 / 肩 / 肘。所有角度单位为弧度。 -->
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <global offwidth="1280" offheight="800"/>
+    <headlight ambient="0.45 0.45 0.45" diffuse="0.55 0.55 0.55" specular="0.1 0.1 0.1"/>
+    <quality shadowsize="2048"/>
+    <map znear="0.01"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.62 0.76 0.92" rgb2="0.08 0.12 0.2" width="512" height="512"/>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.22 0.25 0.3" rgb2="0.28 0.31 0.37" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.12"/>
+    <material name="base" rgba="0.25 0.28 0.33 1"/>
+    <material name="link_a" rgba="0.93 0.5 0.15 1"/>
+    <material name="link_b" rgba="0.2 0.6 0.85 1"/>
+    <material name="link_c" rgba="0.35 0.75 0.45 1"/>
+    <material name="tip" rgba="0.95 0.25 0.3 1"/>
+  </asset>
+
+  <default>
+    <joint damping="0.4" armature="0.01"/>
+    <geom density="300" contype="1" conaffinity="1"/>
+    <position kp="60" kv="6"/>
+  </default>
+
+  <worldbody>
+    <light pos="1 -1 3" dir="-0.3 0.3 -1" directional="true" castshadow="true"/>
+    <geom name="floor" type="plane" size="3 3 0.1" material="grid"/>
+    <camera name="front" pos="1.6 -1.6 1.1" xyaxes="0.707 0.707 0 -0.27 0.27 0.92"/>
+
+    <body name="base" pos="0 0 0">
+      <geom name="base_geom" type="cylinder" size="0.13 0.05" pos="0 0 0.05" material="base"/>
+      <body name="link1" pos="0 0 0.1">
+        <joint name="base_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0"/>
+        <geom name="link1_geom" type="capsule" fromto="0 0 0 0 0 0.25" size="0.05" material="link_a"/>
+        <body name="link2" pos="0 0 0.25">
+          <joint name="shoulder" type="hinge" axis="0 1 0" range="-2.0 2.0"/>
+          <geom name="link2_geom" type="capsule" fromto="0 0 0 0.35 0 0" size="0.04" material="link_b"/>
+          <body name="link3" pos="0.35 0 0">
+            <joint name="elbow" type="hinge" axis="0 1 0" range="-2.3 2.3"/>
+            <geom name="link3_geom" type="capsule" fromto="0 0 0 0.3 0 0" size="0.035" material="link_c"/>
+            <body name="tip" pos="0.3 0 0">
+              <geom name="tip_geom" type="sphere" size="0.045" material="tip"/>
+              <site name="tip_site" pos="0 0 0" size="0.01"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <contact>
+    <!-- 底座是固定在世界上的，MuJoCo 不会自动排除它与第一节连杆的碰撞，这里手动排除 -->
+    <exclude body1="base" body2="link1"/>
+  </contact>
+
+  <actuator>
+    <position name="act_base_yaw" joint="base_yaw" ctrlrange="-3.0 3.0" forcerange="-60 60"/>
+    <position name="act_shoulder" joint="shoulder" ctrlrange="-2.0 2.0" forcerange="-60 60"/>
+    <position name="act_elbow" joint="elbow" ctrlrange="-2.3 2.3" forcerange="-60 60"/>
+  </actuator>
+</mujoco>

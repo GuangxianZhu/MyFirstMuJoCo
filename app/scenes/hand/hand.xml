@@ -1,0 +1,185 @@
+<mujoco model="dexterous_hand">
+  <!-- 五指灵巧手 + 6 自由度手腕。角度单位弧度，长度单位米。
+       坐标约定（手腕零位）：手指沿 +x 伸出，拇指在 +y 侧，手掌朝 -z（朝下）。
+       手指/拇指的弯曲轴为 +y，正方向 = 朝手掌弯曲。 -->
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <global offwidth="1280" offheight="800"/>
+    <headlight ambient="0.45 0.45 0.45" diffuse="0.55 0.55 0.55" specular="0.1 0.1 0.1"/>
+    <quality shadowsize="2048"/>
+    <map znear="0.005" force="0.006"/>
+    <rgba contactforce="1 0.40 0.12 1" contactpoint="1 0.92 0.15 1"/>
+    <scale forcewidth="0.007" contactwidth="0.010" contactheight="0.003"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.62 0.76 0.92" rgb2="0.08 0.12 0.2" width="512" height="512"/>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.22 0.25 0.3" rgb2="0.28 0.31 0.37" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.12"/>
+    <material name="skin" rgba="0.90 0.72 0.60 1"/>
+    <material name="palm" rgba="0.82 0.64 0.52 1"/>
+    <material name="tip" rgba="0.95 0.45 0.40 1"/>
+    <material name="cuff" rgba="0.30 0.34 0.40 1"/>
+    <material name="prop" rgba="0.30 0.55 0.85 1"/>
+  </asset>
+
+  <default>
+    <!-- 手部几何体只和世界/物体碰撞（contype=1, conaffinity=0），手内部互不碰撞，避免卡住 -->
+    <geom contype="1" conaffinity="0" density="1000" friction="1.0 0.005 0.0001" material="skin"/>
+    <default class="finger">
+      <joint type="hinge" damping="0.005" armature="0.001"/>
+      <!-- 力矩输出 (N·m)：由 Python 的关节阻抗控制器按 K(q_d-q)-D*qd 计算 -->
+      <motor ctrlrange="-1 1"/>
+    </default>
+    <default class="wrist_slide">
+      <joint type="slide" damping="0" armature="0.05"/>
+      <position kp="3000" kv="100" forcerange="-300 300"/>
+    </default>
+    <default class="wrist_rot">
+      <joint type="hinge" damping="0" armature="0.005"/>
+      <position kp="60" kv="2" forcerange="-20 20"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0.5 -0.5 1.5" dir="-0.3 0.3 -1" directional="true" castshadow="true"/>
+    <geom name="floor" type="plane" size="1.5 1.5 0.1" material="grid" contype="1" conaffinity="1"/>
+    <camera name="front" pos="0.75 -0.6 0.55" xyaxes="0.62 0.78 0 -0.25 0.2 0.95"/>
+    <!-- 演示道具：固定方块(mocap)。平时藏在地下，演示脚本通过 data.mocap_pos 把它摆出来 -->
+    <body name="prop_block" mocap="true" pos="0 0 -1">
+      <geom name="prop_block_geom" type="box" size="0.05 0.02 0.03" material="prop" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    </body>
+
+    <body name="wrist_x_carrier" pos="0 0 0.30" gravcomp="1">
+      <inertial pos="0 0 0" mass="0.05" diaginertia="1e-4 1e-4 1e-4"/>
+      <joint name="wrist_x" class="wrist_slide" axis="1 0 0" range="-0.3 0.3"/>
+      <body name="wrist_y_carrier" gravcomp="1">
+        <inertial pos="0 0 0" mass="0.05" diaginertia="1e-4 1e-4 1e-4"/>
+        <joint name="wrist_y" class="wrist_slide" axis="0 1 0" range="-0.3 0.3"/>
+        <body name="wrist_z_carrier" gravcomp="1">
+          <inertial pos="0 0 0" mass="0.05" diaginertia="1e-4 1e-4 1e-4"/>
+          <joint name="wrist_z" class="wrist_slide" axis="0 0 1" range="-0.295 0.3"/>
+          <body name="wrist_yaw_carrier" gravcomp="1">
+            <inertial pos="0 0 0" mass="0.05" diaginertia="1e-4 1e-4 1e-4"/>
+            <joint name="wrist_yaw" class="wrist_rot" axis="0 0 1" range="-3.0 3.0"/>
+            <body name="wrist_pitch_carrier" gravcomp="1">
+              <inertial pos="0 0 0" mass="0.05" diaginertia="1e-4 1e-4 1e-4"/>
+              <joint name="wrist_pitch" class="wrist_rot" axis="0 1 0" range="-1.6 1.6"/>
+              <body name="palm" gravcomp="1">
+                <joint name="wrist_roll" class="wrist_rot" axis="1 0 0" range="-3.0 3.0"/>
+                <geom name="palm_geom" type="box" size="0.05 0.045 0.01" pos="0.05 0 0" material="palm"/>
+                <geom name="cuff_geom" type="capsule" fromto="-0.09 0 0 0.0 0 0" size="0.028" density="200" material="cuff"/>
+
+                <body name="index_prox" pos="0.10 0.033 0">
+                  <joint name="index_spread" class="finger" axis="0 0 1" range="-0.35 0.35"/>
+                  <joint name="index_mcp" class="finger" axis="0 1 0" range="-0.2 1.57"/>
+                  <geom type="capsule" fromto="0 0 0 0.048 0 0" size="0.0085"/>
+                  <body name="index_mid" pos="0.048 0 0">
+                    <joint name="index_pip" class="finger" axis="0 1 0" range="0.0 1.9"/>
+                    <geom type="capsule" fromto="0 0 0 0.028 0 0" size="0.0081"/>
+                    <body name="index_dist" pos="0.028 0 0">
+                      <joint name="index_dip" class="finger" axis="0 1 0" range="0.0 1.4"/>
+                      <geom type="capsule" fromto="0 0 0 0.024 0 0" size="0.0077" material="tip"/>
+                      <site name="index_tip" pos="0.0316 0 0" size="0.003" rgba="1 1 0 1"/>
+                    </body>
+                  </body>
+                </body>
+
+                <body name="middle_prox" pos="0.10 0.011 0">
+                  <joint name="middle_spread" class="finger" axis="0 0 1" range="-0.35 0.35"/>
+                  <joint name="middle_mcp" class="finger" axis="0 1 0" range="-0.2 1.57"/>
+                  <geom type="capsule" fromto="0 0 0 0.052 0 0" size="0.0085"/>
+                  <body name="middle_mid" pos="0.052 0 0">
+                    <joint name="middle_pip" class="finger" axis="0 1 0" range="0.0 1.9"/>
+                    <geom type="capsule" fromto="0 0 0 0.031 0 0" size="0.0081"/>
+                    <body name="middle_dist" pos="0.031 0 0">
+                      <joint name="middle_dip" class="finger" axis="0 1 0" range="0.0 1.4"/>
+                      <geom type="capsule" fromto="0 0 0 0.025 0 0" size="0.0077" material="tip"/>
+                      <site name="middle_tip" pos="0.0326 0 0" size="0.003" rgba="1 1 0 1"/>
+                    </body>
+                  </body>
+                </body>
+
+                <body name="ring_prox" pos="0.10 -0.011 0">
+                  <joint name="ring_spread" class="finger" axis="0 0 1" range="-0.35 0.35"/>
+                  <joint name="ring_mcp" class="finger" axis="0 1 0" range="-0.2 1.57"/>
+                  <geom type="capsule" fromto="0 0 0 0.048 0 0" size="0.0082"/>
+                  <body name="ring_mid" pos="0.048 0 0">
+                    <joint name="ring_pip" class="finger" axis="0 1 0" range="0.0 1.9"/>
+                    <geom type="capsule" fromto="0 0 0 0.029 0 0" size="0.0078"/>
+                    <body name="ring_dist" pos="0.029 0 0">
+                      <joint name="ring_dip" class="finger" axis="0 1 0" range="0.0 1.4"/>
+                      <geom type="capsule" fromto="0 0 0 0.024 0 0" size="0.0074" material="tip"/>
+                      <site name="ring_tip" pos="0.0314 0 0" size="0.003" rgba="1 1 0 1"/>
+                    </body>
+                  </body>
+                </body>
+
+                <body name="little_prox" pos="0.10 -0.033 0">
+                  <joint name="little_spread" class="finger" axis="0 0 1" range="-0.35 0.35"/>
+                  <joint name="little_mcp" class="finger" axis="0 1 0" range="-0.2 1.57"/>
+                  <geom type="capsule" fromto="0 0 0 0.038 0 0" size="0.0075"/>
+                  <body name="little_mid" pos="0.038 0 0">
+                    <joint name="little_pip" class="finger" axis="0 1 0" range="0.0 1.9"/>
+                    <geom type="capsule" fromto="0 0 0 0.022 0 0" size="0.0071"/>
+                    <body name="little_dist" pos="0.022 0 0">
+                      <joint name="little_dip" class="finger" axis="0 1 0" range="0.0 1.4"/>
+                      <geom type="capsule" fromto="0 0 0 0.021 0 0" size="0.0067" material="tip"/>
+                      <site name="little_tip" pos="0.0278 0 0" size="0.003" rgba="1 1 0 1"/>
+                    </body>
+                  </body>
+                </body>
+
+                <body name="thumb_prox" pos="0.025 0.04 -0.004" euler="0 0 1.0472">
+                  <joint name="thumb_rot" class="finger" axis="0 0 -1" range="-0.5 1.2"/>
+                  <joint name="thumb_cmc" class="finger" axis="0 1 0" range="-0.3 1.4"/>
+                  <geom type="capsule" fromto="0 0 0 0.045 0 0" size="0.0095"/>
+                  <body name="thumb_mid" pos="0.045 0 0">
+                    <joint name="thumb_mcp" class="finger" axis="0 1 0" range="-0.1 1.5"/>
+                    <geom type="capsule" fromto="0 0 0 0.032 0 0" size="0.009"/>
+                    <body name="thumb_dist" pos="0.032 0 0">
+                      <joint name="thumb_ip" class="finger" axis="0 1 0" range="-0.1 1.4"/>
+                      <geom type="capsule" fromto="0 0 0 0.026 0 0" size="0.0085" material="tip"/>
+                      <site name="thumb_tip" pos="0.0345 0 0" size="0.003" rgba="1 1 0 1"/>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="act_wrist_x" joint="wrist_x" class="wrist_slide" ctrlrange="-0.3 0.3"/>
+    <position name="act_wrist_y" joint="wrist_y" class="wrist_slide" ctrlrange="-0.3 0.3"/>
+    <position name="act_wrist_z" joint="wrist_z" class="wrist_slide" ctrlrange="-0.295 0.3"/>
+    <position name="act_wrist_yaw" joint="wrist_yaw" class="wrist_rot" ctrlrange="-3.0 3.0"/>
+    <position name="act_wrist_pitch" joint="wrist_pitch" class="wrist_rot" ctrlrange="-1.6 1.6"/>
+    <position name="act_wrist_roll" joint="wrist_roll" class="wrist_rot" ctrlrange="-3.0 3.0"/>
+    <motor name="act_index_spread" joint="index_spread" class="finger"/>
+    <motor name="act_index_mcp" joint="index_mcp" class="finger"/>
+    <motor name="act_index_pip" joint="index_pip" class="finger"/>
+    <motor name="act_index_dip" joint="index_dip" class="finger"/>
+    <motor name="act_middle_spread" joint="middle_spread" class="finger"/>
+    <motor name="act_middle_mcp" joint="middle_mcp" class="finger"/>
+    <motor name="act_middle_pip" joint="middle_pip" class="finger"/>
+    <motor name="act_middle_dip" joint="middle_dip" class="finger"/>
+    <motor name="act_ring_spread" joint="ring_spread" class="finger"/>
+    <motor name="act_ring_mcp" joint="ring_mcp" class="finger"/>
+    <motor name="act_ring_pip" joint="ring_pip" class="finger"/>
+    <motor name="act_ring_dip" joint="ring_dip" class="finger"/>
+    <motor name="act_little_spread" joint="little_spread" class="finger"/>
+    <motor name="act_little_mcp" joint="little_mcp" class="finger"/>
+    <motor name="act_little_pip" joint="little_pip" class="finger"/>
+    <motor name="act_little_dip" joint="little_dip" class="finger"/>
+    <motor name="act_thumb_rot" joint="thumb_rot" class="finger"/>
+    <motor name="act_thumb_cmc" joint="thumb_cmc" class="finger"/>
+    <motor name="act_thumb_mcp" joint="thumb_mcp" class="finger"/>
+    <motor name="act_thumb_ip" joint="thumb_ip" class="finger"/>
+  </actuator>
+</mujoco>
