@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
@@ -37,6 +38,8 @@ class Recorder:
         self.recording = False
         self.target = win          # 录哪个控件：整窗，或只录中间那一列（win.splitter）
         self.speed = 1.0           # 每帧推进 speed/FPS 秒仿真时间（>1 = 快放）
+        self.width: int | None = None   # GIF 宽度；None = 按录制对象取默认
+        self.keep_every = 1        # GIF 里每隔几帧留一帧（长演示减小文件）
 
     def grab(self) -> Image.Image:
         img = self.target.grab().toImage().convertToFormat(QImage.Format.Format_RGB888)
@@ -44,11 +47,14 @@ class Recorder:
         return Image.frombytes("RGB", (w, h), bytes(img.constBits()), "raw", "RGB", img.bytesPerLine())
 
     def run(self, seconds: float, per_frame=None) -> None:
+        # 主窗口每次 tick 最多推进 0.1 s 仿真时间，快放时一帧分几次 tick
+        n_tick = max(1, int(np.ceil(self.speed / FPS / 0.09)))
         for _ in range(round(seconds * FPS)):
-            self.win._last_wall = time.perf_counter() - self.speed / FPS
             if per_frame:
                 per_frame()
-            self.win.tick()
+            for _ in range(n_tick):
+                self.win._last_wall = time.perf_counter() - self.speed / FPS / n_tick
+                self.win.tick()
             self.app.processEvents()
             if self.recording:
                 self.frames.append(self.grab())
@@ -58,11 +64,12 @@ class Recorder:
 
     def save_gif(self, path: Path) -> None:
         self.recording = False
-        width = GIF_WIDTH if self.target is self.win else CENTER_WIDTH
+        width = self.width or (GIF_WIDTH if self.target is self.win else CENTER_WIDTH)
         h = round(self.frames[0].height * width / self.frames[0].width)
+        frames = self.frames[:: self.keep_every]
         out = [f.resize((width, h), Image.LANCZOS).quantize(colors=COLORS, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
-               for f in self.frames]
-        out[0].save(path, save_all=True, append_images=out[1:], duration=round(1000 / FPS), loop=0, optimize=True, disposal=1)
+               for f in frames]
+        out[0].save(path, save_all=True, append_images=out[1:], duration=round(1000 * self.keep_every / FPS), loop=0, optimize=True, disposal=1)
         print(f"{path.name}: {len(out)} 帧, {path.stat().st_size / 1e6:.1f} MB")
 
     def still(self, path: Path, width: int | None = None) -> None:
@@ -200,7 +207,7 @@ def record_scope(app, out: Path) -> None:
     win.close()
 
 
-def _record_grasp_demo(app, out: Path, key: str, speed: float, name: str) -> None:
+def _record_grasp_demo(app, out: Path, key: str, speed: float, name: str, keep_every: int = 2) -> None:
     """桌面场景里跑一个抓取演示：运行时看"抓取"页签，结束后切到"演示"页签停一会儿看总结和对比曲线。"""
     win = new_window(app, TABLE_MODEL)
     rec = Recorder(win, app)
@@ -208,6 +215,7 @@ def _record_grasp_demo(app, out: Path, key: str, speed: float, name: str) -> Non
     win.cb_forces.setChecked(True)
     win.tabs.setCurrentWidget(win.grasp_view)
     rec.target = win.splitter
+    rec.width, rec.keep_every = 640, keep_every     # GIF 单个 ≤ 3 MB
     dp = win.demo_panel
     dp.combo.setCurrentIndex([f.key for f in dp._factories].index(key))
     rec.run(0.3)
@@ -234,7 +242,7 @@ def record_fragile(app, out: Path) -> None:
 
 def record_compare(app, out: Path) -> None:
     # ---------------------------------------------------------------- 6) 演示 4：位置控制 vs 阻抗控制抓球（4 倍速）
-    _record_grasp_demo(app, out, "compare", 4.0, "demo_compare")
+    _record_grasp_demo(app, out, "compare", 4.0, "demo_compare", keep_every=3)
 
 
 if __name__ == "__main__":
