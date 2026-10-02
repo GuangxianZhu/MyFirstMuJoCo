@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from ..core.renderer import SceneRenderer
 from ..core.sim import Simulation
 from .demo_panel import DemoPanel
+from .grasp_view import GraspView
 from .hand_panel import HandPanel
 from .impedance_panel import ImpedancePanel
 from .panels import JointPanel, StatusPanel
@@ -34,7 +35,7 @@ from .viewport import Viewport
 FRAME_MS = 16  # 约 60 fps
 LEFT_COLUMN_WIDTH = 410
 RIGHT_COLUMN_WIDTH = 360
-SCOPE_EVERY = 4        # 曲线每隔几帧刷新一次（约 15 Hz）
+SCOPE_EVERY = 4        # 曲线 / 抓取页签每隔几帧刷新一次（约 15 Hz）
 DEMO_EVERY = 8         # 演示面板刷新间隔（约 7 Hz）
 BOTTOM_HEIGHT = 300
 
@@ -72,6 +73,7 @@ class MainWindow(QMainWindow):
         self.tactile_view = TactileView(self.sim.tactile.names, labels) if self.sim.tactile else None
         self.scope_panel = ScopePanel(self.sim, labels)
         self.demo_panel = DemoPanel(self.sim) if extras and extras.demos else None
+        self.grasp_view = GraspView(self.sim, labels) if self.sim.grasp is not None else None
 
         # 左栏：手势/协同/节奏（有的话） + 关节滑块，内容多时可滚动
         left_inner = QWidget()
@@ -99,7 +101,7 @@ class MainWindow(QMainWindow):
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color: #8a93a0;")
 
-        # 中间：上面 3D 画面，下面是 触觉 / 曲线 / 演示 页签（可拖动分隔条调整高度）
+        # 中间：上面 3D 画面，下面是 触觉 / 抓取 / 曲线 / 演示 页签（可拖动分隔条调整高度）
         top = QWidget()
         top_lay = QVBoxLayout(top)
         top_lay.setContentsMargins(0, 0, 0, 0)
@@ -109,6 +111,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         if self.tactile_view:
             self.tabs.addTab(self.tactile_view, "触觉")
+        if self.grasp_view:
+            self.tabs.addTab(self.grasp_view, "抓取")
         self.tabs.addTab(self.scope_panel, "曲线")
         if self.demo_panel:
             self.tabs.addTab(self.demo_panel, "演示")
@@ -137,6 +141,8 @@ class MainWindow(QMainWindow):
         self.viewport.rotateRequested.connect(self.renderer.rotate)
         self.viewport.panRequested.connect(self.renderer.pan)
         self.viewport.zoomRequested.connect(self.renderer.zoom)
+        if self.grasp_view:
+            self.grasp_view.resetRequested.connect(self._reset_sim)
         if self.demo_panel:
             self.demo_panel.startRequested.connect(self._start_demo)
             self.demo_panel.stopRequested.connect(self._stop_demo)
@@ -207,6 +213,8 @@ class MainWindow(QMainWindow):
             self.hand_panel.refresh()
         if self.impedance_panel:
             self.impedance_panel.sync()
+        if self.grasp_view:
+            self.grasp_view.refresh()
         self._stat_sim = 0.0
         self._stat_wall = time.perf_counter()
 
@@ -229,6 +237,8 @@ class MainWindow(QMainWindow):
             self.tactile_view.set_reading(self.sim.tactile_reading)
         if self._frame % SCOPE_EVERY == 0 and self.tabs.currentWidget() is self.scope_panel:
             self.scope_panel.refresh()
+        if self.grasp_view is not None and self._frame % SCOPE_EVERY == 0 and self.tabs.currentWidget() is self.grasp_view:
+            self.grasp_view.refresh()
         if self._frame % DEMO_EVERY == 0:
             if self.demo_panel is not None and (self.sim.demo is not None or self.tabs.currentWidget() is self.demo_panel):
                 self.demo_panel.refresh()

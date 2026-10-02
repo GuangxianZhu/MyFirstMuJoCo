@@ -47,6 +47,17 @@ class TactileSensor:
         self._f6 = np.zeros(6)
 
     def read(self, data: mujoco.MjData, with_points: bool = False) -> TactileReading:
+        """统计手各段上的所有接触（不区分对方是地面、桌子还是物体）。"""
+        return self._read(data, with_points, None)
+
+    def read_against(self, data: mujoco.MjData, body_ids: set[int], with_points: bool = False) -> TactileReading:
+        """同 read，但只统计"手的某段 ↔ body_ids 里某个刚体"的接触（例如只看手对物体的握力）。
+
+        物体有多个 geom 时传它的刚体 id 即可；要同时统计多个刚体就传集合。世界里的静态几何（地面、桌子）属于刚体 0。
+        """
+        return self._read(data, with_points, frozenset(int(b) for b in body_ids))
+
+    def _read(self, data: mujoco.MjData, with_points: bool, others: frozenset[int] | None) -> TactileReading:
         m = self.model
         normal = np.zeros(self.n)
         force = np.zeros((self.n, 3))
@@ -56,8 +67,15 @@ class TactileSensor:
 
         for ci in range(data.ncon):
             c = data.contact[ci]
-            s1 = self._seg_of_body[m.geom_bodyid[c.geom1]]
-            s2 = self._seg_of_body[m.geom_bodyid[c.geom2]]
+            b1, b2 = int(m.geom_bodyid[c.geom1]), int(m.geom_bodyid[c.geom2])
+            s1 = self._seg_of_body[b1]
+            s2 = self._seg_of_body[b2]
+            if others is not None:
+                # 只保留"对方在 others 里"的那一侧
+                if b2 not in others:
+                    s1 = -1
+                if b1 not in others:
+                    s2 = -1
             if s1 < 0 and s2 < 0:
                 continue
             mujoco.mj_contactForce(m, data, ci, f6)

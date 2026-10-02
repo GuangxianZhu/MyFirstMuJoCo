@@ -5,6 +5,10 @@
        物体 geom 必须 condim="4" 且带扭转摩擦（friction 第二项 0.02），否则方块会在指尖间绕捏取轴转掉。 -->
   <include file="hand.xml"/>
 
+  <!-- 抓取需要"静摩擦"：MuJoCo 默认的软接触摩擦会缓慢蠕滑（实测捏住的方块抬起后约 6 mm/s 往下滑，1~3 s 内掉落）。
+       noslip 求解器在每步后再把摩擦接触上的滑移消掉。只加在桌面场景里，hand.xml 不变。见 docs/NEXT_STAGE_B.md 附录 A。 -->
+  <option noslip_iterations="10"/>
+
   <asset>
     <!-- 桌面用和地面不同的颜色，否则看不出桌子 -->
     <texture name="tabletop" type="2d" builtin="checker" rgb1="0.55 0.45 0.36" rgb2="0.60 0.50 0.40" width="300" height="300"/>

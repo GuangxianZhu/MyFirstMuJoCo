@@ -15,6 +15,7 @@ import numpy as np
 
 from .controllers import Controller, ManualController, Observation, RhythmController
 from .demo import Demo
+from .grasp import GraspMonitor
 from .impedance import DEFAULT_D, DEFAULT_K, DEFAULT_LIMIT, JointImpedance
 from .params import ActuatorSpec, describe_actuators
 from .physics import PhysicsParams
@@ -86,6 +87,12 @@ class Simulation:
 
         self.scope = Scope(len(self.actuators), n_seg)
 
+        # 抓取指标（只在有物体的场景里有）：只统计"手 ↔ 目标物体"的接触
+        g = self.extras.grasp if self.extras else None
+        self.grasp: GraspMonitor | None = (
+            GraspMonitor(self, g["object"], g.get("fragile_limit")) if g and self.tactile else None
+        )
+
         # 演示
         self.demo: Demo | None = None
         self.last_demo: Demo | None = None
@@ -131,6 +138,37 @@ class Simulation:
         self.drive.last_tau[:] = 0.0
         self.scope.clear()
         self.tactile_reading = self.tactile.read(self.data) if self.tactile else None
+        if self.grasp is not None:
+            self.grasp.reset()
+
+    # --- 抓取物体 ---
+    def set_grasp_object(self, name: str, fragile_limit: float | None = None) -> GraspMonitor:
+        """切换抓取指标统计的物体（演示用）。旧物体的颜色先还原。"""
+        if self.tactile is None:
+            raise RuntimeError("当前场景没有触觉配置，不能统计抓取指标")
+        if self.grasp is not None:
+            self.grasp.restore_color()
+        self.grasp = GraspMonitor(self, name, fragile_limit)
+        return self.grasp
+
+    def reset_object(self, name: str) -> None:
+        """只把一个自由物体放回 XML 里写的初始位姿（速度清零），不动手和演示状态。
+
+        初始位姿取 model.qpos0（就是 XML 里写的位置）。若它正是抓取指标的对象，指标一并清零。
+        """
+        m = self.model
+        b = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, name)
+        if b < 0:
+            raise ValueError(f"刚体不存在: {name}")
+        j = int(m.body_jntadr[b])
+        if j < 0 or m.jnt_type[j] != mujoco.mjtJoint.mjJNT_FREE:
+            raise ValueError(f"{name} 不是自由物体")
+        qa, va = int(m.jnt_qposadr[j]), int(m.jnt_dofadr[j])
+        self.data.qpos[qa:qa + 7] = m.qpos0[qa:qa + 7]
+        self.data.qvel[va:va + 6] = 0.0
+        mujoco.mj_forward(m, self.data)
+        if self.grasp is not None and self.grasp.body == b:
+            self.grasp.reset()
 
     def set_controller(self, controller: Controller) -> None:
         """切换当前生效的控制器（不会重置 manual 里的目标）。"""
@@ -222,6 +260,8 @@ class Simulation:
 
         if self.tactile is not None:
             self.tactile_reading = self.tactile.read(self.data)
+        if self.grasp is not None:
+            self.grasp.update()
         tau = np.where(self.drive.mask, self.drive.last_tau, self.joint_torques())
         seg = self.tactile_reading.normal if self.tactile_reading is not None else None
         self.scope.push(obs.time, targets, obs.q, tau, seg)
