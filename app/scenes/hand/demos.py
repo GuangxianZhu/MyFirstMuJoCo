@@ -309,3 +309,166 @@ class ImpedanceCompareDemo(Demo):
 
     def result_curves(self):
         return [(self._labels[i], np.array(t), np.array(f)) for i, (t, f) in enumerate(self._curves) if t]
+
+
+# ====================================================================== 抓取演示的共用小工具
+def _trial_line_err(err: float | None) -> str:
+    return "—" if err is None else f"{err * 1000:.1f} mm"
+
+
+class _HandHome:
+    """把手腕和手指目标平滑地送回默认值（每周期直接写 targets，不用 set_pose，见陷阱 T1）。"""
+
+    def __init__(self, sim, t: float, duration: float = 1.5):
+        self.start = sim.manual.targets.copy()
+        self.goal = np.array([a.default for a in sim.actuators], dtype=float)
+        self.t0, self.dur = t, duration
+
+    def update(self, sim, t: float) -> bool:
+        u = _smooth((t - self.t0) / self.dur)
+        sim.manual.targets[:] = self.start + (self.goal - self.start) * u
+        sim.manual.revision += 1
+        return t - self.t0 >= self.dur
+
+
+# ====================================================================== 演示 3：轻拿轻放易碎物
+class FragilePickPlaceDemo(Demo):
+    key = "fragile"
+    title = "抓取：轻拿轻放易碎物"
+    description = (
+        "黄色方块是“易碎物”：任何一根手指对它的力超过 1.8 N 并持续 20 ms 就算碎（变红）。"
+        "同一套捏取动作（靠近→下降→闭合到目标力→抬起→搬到绿色放置区→放下→松开）做两次："
+        "① 柔顺阻抗、目标力 1.0 N；② 刚硬（≈位置控制）、目标力 3.0 N。看“抓取”页签的握力曲线和判定。"
+        "（原计划柔顺用 1.2 N，实测柔顺参数下手指闭合到底拇指最多约 1.1 N，所以改成 1.0 N。）"
+    )
+    result_title = "两次试验的总握力（虚线 = 易碎阈值，单指）"
+    result_ylabel = "总握力 (N)"
+    camera = {"azimuth": 135.0, "elevation": -22.0, "distance": 0.55, "lookat": (0.15, -0.02, 0.15)}
+    needs_object = True
+
+    OBJECT = "fragile"
+    FRAGILE_LIMIT = 1.8
+    PLACE_XY = (0.15, -0.12)
+    TRIALS = [
+        # (标签, 阻抗预设下标, 目标力 N)
+        ("轻拿轻放（柔顺, 目标1.0N）", 0, 1.0),     # 柔顺参数下闭合到底：食指 1.32 N、拇指 1.10 N，够不到 1.2 N
+        ("用力抓（刚硬, 目标3.0N）", 2, 3.0),
+    ]
+    LAND_WINDOW = 0.3       # 落地冲击：物体碰到桌面后这么长时间内的物体—桌面法向力峰值
+
+    def __init__(self):
+        super().__init__()
+        self.phase = "TRIAL"
+        self.trial = 0
+        self.results: list[dict] = []
+        self._curves: list[tuple[list[float], list[float]]] = [([], []) for _ in self.TRIALS]
+        self.seq = None
+
+    # --- 生命周期 ---
+    def setup(self, sim) -> None:
+        self._default_object = sim.grasp.object_name if sim.grasp else None
+        self._default_limit = sim.grasp.fragile_limit if sim.grasp else None
+        sim.set_grasp_object(self.OBJECT, self.FRAGILE_LIMIT)
+        self._start_trial(sim, 0, 0.0)
+
+    def _start_trial(self, sim, i: int, t: float) -> None:
+        from app.scenes.hand.grasp_sequence import PinchGraspSequence, PinchParams
+        self.trial, self.phase = i, "TRIAL"
+        _, preset, F = self.TRIALS[i]
+        _, ks, ds, lim = PRESETS[preset]
+        sim.drive.apply_preset(ks, ds, lim)
+        self.seq = PinchGraspSequence()
+        self.seq.start(sim, self.OBJECT, PinchParams(F_target=F, place_xy=self.PLACE_XY), t=t)
+        self._t0 = t
+        self._land_t: float | None = None
+        self._table_peak = 0.0
+        self._finger_peak = 0.0
+
+    def update(self, sim, t: float) -> None:
+        from app.core.grasp import pair_normal_force
+        if self.phase == "TRIAL":
+            seq = self.seq
+            seq.update(sim, t)
+            gm = sim.grasp
+            m = gm.metrics()
+            ts, fs = self._curves[self.trial]
+            ts.append(t - self._t0)
+            fs.append(m["grip_total"])
+            self._finger_peak = max(self._finger_peak, m["finger_max"])
+            # 落地冲击：放下阶段物体第一次碰到桌面起 0.3 s 内的物体—桌面法向力峰值
+            if seq.state in ("LOWER", "RELEASE", "RETREAT") or self._land_t is not None:
+                f_table = pair_normal_force(sim.model, sim.data, {gm.body}, {0})
+                # 序列器在碰到桌面的同一周期就进入 RELEASE，所以两个状态都算"刚落地"
+                if self._land_t is None and seq.state in ("LOWER", "RELEASE") and f_table >= 0.1:
+                    self._land_t = t
+                if self._land_t is not None and t - self._land_t <= self.LAND_WINDOW:
+                    self._table_peak = max(self._table_peak, f_table)
+            if seq.finished:
+                self._record(sim, t)
+                if self.trial + 1 < len(self.TRIALS):
+                    self.phase = "RESET_OBJECT"
+                    self._home = _HandHome(sim, t)
+                else:
+                    self.finished = True
+        elif self.phase == "RESET_OBJECT":
+            # 不能 sim.reset()（会把演示状态也清掉）：手回到初始，物体单独放回 A 点
+            if self._home.update(sim, t):
+                sim.reset_object(self.OBJECT)
+                self._start_trial(sim, self.trial + 1, t)
+
+    def _record(self, sim, t: float) -> None:
+        seq, gm = self.seq, sim.grasp
+        m = gm.metrics()
+        placed = seq.done
+        err = float(np.linalg.norm(np.array(m["obj_pos"][:2]) - self.PLACE_XY)) if placed else None
+        self.results.append({
+            "label": self.TRIALS[self.trial][0],
+            "done": seq.done,
+            "failed": seq.failed,
+            "broken": gm.broken,
+            "lift_end_state": seq.lift_end_state,
+            "final_state": gm.state,
+            "peak_finger_force": self._finger_peak,
+            "place_error": err,
+            "peak_table_force": self._table_peak if self._land_t is not None else None,
+            "duration": t - self._t0,
+        })
+
+    def teardown(self, sim) -> None:
+        sim.drive.reset()
+        if sim.grasp is not None:
+            sim.grasp.restore_color()
+        sim.reset_object(self.OBJECT)
+        if self._default_object:
+            sim.set_grasp_object(self._default_object, self._default_limit)
+
+    # --- 结果 ---
+    def progress(self) -> str:
+        if self.phase == "RESET_OBJECT":
+            return f"第 {self.trial + 1} 次结束，手复位、物体放回 A 点"
+        label = self.TRIALS[self.trial][0]
+        seq = self.seq
+        return f"第 {self.trial + 1}/{len(self.TRIALS)} 次：{label}    阶段：{seq.label if seq else ''}    单指峰值 {self._finger_peak:.2f} N"
+
+    def summary(self) -> str:
+        lines = []
+        for r in self.results:
+            head = f"{r['label']}："
+            if r["broken"]:
+                lines.append(f"{head}碎了（单指峰值握力 {r['peak_finger_force']:.2f} N > 阈值 {self.FRAGILE_LIMIT:.1f} N），"
+                             f"用时 {r['duration']:.1f} s")
+            elif r["done"]:
+                ok = "成功" if r["lift_end_state"] == "抓牢" else f"放下了，但抬起时判定为“{r['lift_end_state']}”"
+                impact = "—" if r["peak_table_force"] is None else f"{r['peak_table_force']:.2f} N"
+                lines.append(f"{head}{ok}，峰值握力 {r['peak_finger_force']:.2f} N，放置误差 {_trial_line_err(r['place_error'])}，"
+                             f"落地冲击 {impact}，用时 {r['duration']:.1f} s")
+            else:
+                lines.append(f"{head}失败：{r['failed']}（单指峰值握力 {r['peak_finger_force']:.2f} N），用时 {r['duration']:.1f} s")
+        return "\n".join(lines)
+
+    def result_curves(self):
+        out = [(self.TRIALS[i][0], np.array(t), np.array(f)) for i, (t, f) in enumerate(self._curves) if t]
+        if out:
+            t_max = max(float(c[1][-1]) for c in out)
+            out.append((f"易碎阈值 {self.FRAGILE_LIMIT:.1f} N", np.array([0.0, t_max]), np.array([self.FRAGILE_LIMIT] * 2)))
+        return out

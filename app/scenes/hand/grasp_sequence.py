@@ -270,8 +270,11 @@ class PinchGraspSequence:
             else:
                 self._hit_end = None
                 self._s = min(self._s + p.close_rate * dt, 1.0)
-            if self.state == "CLOSE" and el > 6.0:
-                self._fail(sim, t, f"6 s 内没有夹到目标力（食指 {fi:.2f} N、拇指 {ft:.2f} N）")
+            # 超时：文档原定 6 s，但 0.15/s 的闭合速度从 0 闭合到 1 本身就要 6.7 s，"s 到 1 仍不达标"永远触发不了；
+            # 改成"闭合到底所需时间 + 1.5 s"
+            limit = 1.0 / max(p.close_rate, 1e-6) + 1.5
+            if self.state == "CLOSE" and el > limit:
+                self._fail(sim, t, f"{limit:.1f} s 内没有夹到目标力（食指 {fi:.2f} N、拇指 {ft:.2f} N）")
 
         elif st == "SETTLE":
             if el >= 0.4:
