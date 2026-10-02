@@ -1,9 +1,47 @@
-# MuJoCo 灵巧手演示
+<div align="center">
 
-纯 Python：MuJoCo 仿真 + PySide6 界面。五指灵巧手（20 个手指自由度）加 6 自由度手腕，
-左侧手势/协同/关节滑块，中间 3D 画面（下方是 触觉 / 曲线 / 演示 页签），右侧仿真状态、手指阻抗和物理参数。
+# 🖐️ MyFirstMuJoCo
 
-## 运行（Windows）
+**纯 Python 的灵巧手仿真演示：MuJoCo + PySide6**
+五指灵巧手（20 个手指自由度）· 6 自由度可移动手腕 · 关节阻抗控制 · 全手分段触觉 · 实时曲线 · 一键演示
+
+![Python](https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white)
+![MuJoCo](https://img.shields.io/badge/MuJoCo-3.x-F26B21)
+![PySide6](https://img.shields.io/badge/GUI-PySide6-41CD52?logo=qt&logoColor=white)
+![Platform](https://img.shields.io/badge/Windows-lightgrey)
+
+<img src="docs/media/hero.gif" alt="灵巧手：预设手势与节奏动作" width="900">
+
+<sub>预设手势（张开 / 握拳 / OK / 数字）与手指节奏动作，左侧滑块跟着同步。全部录自真实界面。</sub>
+
+</div>
+
+## ✨ 亮点
+
+- **手指是力矩执行器，控制律在 Python 里算**：`τ = K·(目标角 − 当前角) − D·角速度`，限幅后写进执行器。刚度、阻尼、力矩上限实时可调，可以直接对比柔顺控制和位置控制
+- **全手分段三维触觉**：掌心 + 五指共 16 段，每段的法向力、合力、接触点；界面里能看到每一节的受力，也能在 3D 画面上叠加接触点和力箭头
+- **一键演示**：每个演示自带"运行状态 + 结果总结 + 对比曲线"，写新演示只要继承一个 `Demo` 类
+- **核心与界面分离**：仿真核心不依赖 Qt，可以无界面批量跑；换手模型只需要 XML + 一个 `*_extras.py`，界面代码不用改
+- **控制周期与物理步长分开**（零阶保持），结构和单片机定时控制环一致，方便以后把单片机控制逻辑用 Python 重写进来
+
+## 🎬 演示
+
+<table>
+<tr>
+<td align="center" width="50%"><b>触觉：按压桌面</b><br><sub>手腕按总力闭环下压：先指尖，再放平手掌（掌心承力）</sub><br><img src="docs/media/demo_press.gif" alt="触觉按压桌面"></td>
+<td align="center" width="50%"><b>阻抗：柔顺 / 默认 / 刚硬对比</b><br><sub>同一个"压到更深"的指令，三组阻抗参数，食指接触力差 5 倍</sub><br><img src="docs/media/demo_impedance.gif" alt="阻抗对比"></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="docs/media/tactile_tip.png" alt="指尖按压的触觉图"><br><sub>触觉页签：指尖按压时只有四根指尖受力</sub></td>
+<td align="center" width="50%"><img src="docs/media/scope.png" alt="实时曲线"><br><sub>曲线页签：目标/实际角度、力矩（虚线为限幅）、各指触觉力</sub></td>
+</tr>
+</table>
+
+## 🚀 快速开始
+
 
 ```powershell
 cd MyFirstMuJoCo
@@ -87,9 +125,12 @@ tests/test_core.py             核心层测试（机械臂 + 物理参数）
 tests/test_hand.py             手模型/手势/协同/节奏测试
 tests/test_stage_a.py          阻抗 / 触觉 / 示波器 / 两个演示测试
 tests/smoke_stage_a.py         阶段 A 界面冒烟测试（会截图）
+tools/make_readme_media.py     录制 README 用的截图和 GIF（docs/media/）
 tests/smoke_ui.py              机械臂界面冒烟测试
 tests/smoke_hand_ui.py         灵巧手界面冒烟测试（两个冒烟测试需无头环境变量，见文件头注释）
 ```
+
+重新生成 README 的截图和 GIF：`python tools/make_readme_media.py`（需要 `pip install pillow`；无显示器时的环境变量见脚本开头）
 
 运行测试：`python tests/test_core.py`、`python tests/test_hand.py`、`python tests/test_stage_a.py`
 
