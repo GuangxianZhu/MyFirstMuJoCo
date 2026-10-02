@@ -1,10 +1,12 @@
 """生成 README 用的截图和 GIF（直接录真实界面，无需显示器）。依赖 Pillow：pip install pillow
 
     QT_QPA_PLATFORM=offscreen MUJOCO_GL=egl PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless \
-        python tools/make_readme_media.py [输出目录，默认 docs/media]
+        python tools/make_readme_media.py [输出目录，默认 docs/media] [--only fragile,compare]
 
-Windows 上有显示器时去掉那几个环境变量即可。每帧按固定的仿真时间推进（和电脑快慢无关），所以录出来是 1 倍速。
+Windows 上有显示器时去掉那几个环境变量即可。每帧按固定的仿真时间推进（和电脑快慢无关），所以录出来是 1 倍速
+（两个抓取演示较长，按 2 倍 / 4 倍速录，README 里注明）。--only 只录指定的几段：hero / press / impedance / scope / fragile / compare。
 """
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -19,6 +21,9 @@ from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 import app.ui.main_window as mw  # noqa: E402
 from main import DEFAULT_MODEL, apply_dark_theme  # noqa: E402
 
+TABLE_MODEL = ROOT / "app" / "scenes" / "hand" / "hand_table.xml"
+SEGMENTS = ["hero", "press", "impedance", "scope", "fragile", "compare"]
+
 FPS = 15
 GIF_WIDTH = 1000          # 整窗 GIF 的宽度（像素）；只录中间一列时用 CENTER_WIDTH
 CENTER_WIDTH = 820
@@ -31,6 +36,7 @@ class Recorder:
         self.frames: list[Image.Image] = []
         self.recording = False
         self.target = win          # 录哪个控件：整窗，或只录中间那一列（win.splitter）
+        self.speed = 1.0           # 每帧推进 speed/FPS 秒仿真时间（>1 = 快放）
 
     def grab(self) -> Image.Image:
         img = self.target.grab().toImage().convertToFormat(QImage.Format.Format_RGB888)
@@ -39,7 +45,7 @@ class Recorder:
 
     def run(self, seconds: float, per_frame=None) -> None:
         for _ in range(round(seconds * FPS)):
-            self.win._last_wall = time.perf_counter() - 1.0 / FPS
+            self.win._last_wall = time.perf_counter() - self.speed / FPS
             if per_frame:
                 per_frame()
             self.win.tick()
@@ -67,20 +73,30 @@ class Recorder:
         print(f"{path.name}: {path.stat().st_size / 1e3:.0f} KB")
 
 
-def new_window(app) -> mw.MainWindow:
-    win = mw.MainWindow(DEFAULT_MODEL, start_timer=False)
+def new_window(app, model=DEFAULT_MODEL) -> mw.MainWindow:
+    win = mw.MainWindow(model, start_timer=False)
     win.resize(1560, 900)
     win.show()
     return win
 
 
 def main() -> None:
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs" / "media"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("out", nargs="?", default=str(ROOT / "docs" / "media"))
+    ap.add_argument("--only", default=",".join(SEGMENTS), help="逗号分隔：" + ",".join(SEGMENTS))
+    args = ap.parse_args()
+    out = Path(args.out)
+    only = set(args.only.split(","))
     out.mkdir(parents=True, exist_ok=True)
     app = QApplication([])
     apply_dark_theme(app)
     mw.SCOPE_EVERY, mw.DEMO_EVERY = 1, 2      # 录制时提高曲线刷新率（每帧 = 1/15 秒仿真时间）
+    for seg in SEGMENTS:
+        if seg in only:
+            globals()[f"record_{seg}"](app, out)
 
+
+def record_hero(app, out: Path) -> None:
     # ---------------------------------------------------------------- 1) 主图：手势 + 节奏动作，镜头缓慢旋转
     win = new_window(app)
     rec = Recorder(win, app)
@@ -108,6 +124,8 @@ def main() -> None:
     rec.save_gif(out / "hero.gif")
     win.close()
 
+
+def record_press(app, out: Path) -> None:
     # ---------------------------------------------------------------- 2) 触觉：按压桌面
     win = new_window(app)
     rec = Recorder(win, app)
@@ -138,6 +156,8 @@ def main() -> None:
     rec.save_gif(out / "demo_press.gif")
     win.close()
 
+
+def record_impedance(app, out: Path) -> None:
     # ---------------------------------------------------------------- 3) 阻抗对比
     win = new_window(app)
     rec = Recorder(win, app)
@@ -166,6 +186,8 @@ def main() -> None:
     rec.save_gif(out / "demo_impedance.gif")
     win.close()
 
+
+def record_scope(app, out: Path) -> None:
     # ---------------------------------------------------------------- 4) 实时曲线截图（节奏动作 + 触觉按压中的曲线）
     win = new_window(app)
     rec = Recorder(win, app)
@@ -176,6 +198,43 @@ def main() -> None:
     rec.run(6.0)
     rec.still(out / "scope.png")
     win.close()
+
+
+def _record_grasp_demo(app, out: Path, key: str, speed: float, name: str) -> None:
+    """桌面场景里跑一个抓取演示：运行时看"抓取"页签，结束后切到"演示"页签停一会儿看总结和对比曲线。"""
+    win = new_window(app, TABLE_MODEL)
+    rec = Recorder(win, app)
+    win.cb_points.setChecked(True)
+    win.cb_forces.setChecked(True)
+    win.tabs.setCurrentWidget(win.grasp_view)
+    rec.target = win.splitter
+    dp = win.demo_panel
+    dp.combo.setCurrentIndex([f.key for f in dp._factories].index(key))
+    rec.run(0.3)
+    rec.start()
+    rec.speed = speed
+    dp.start_btn.click()
+    for _ in range(FPS * 120):
+        rec.run(1 / FPS)
+        if win.sim.demo is None:
+            break
+    rec.speed = 1.0
+    win.tabs.setCurrentWidget(dp)
+    rec.run(0.3)
+    rec.still(out / f"{name}.png")
+    rec.run(2.2)
+    rec.save_gif(out / f"{name}.gif")
+    win.close()
+
+
+def record_fragile(app, out: Path) -> None:
+    # ---------------------------------------------------------------- 5) 演示 3：轻拿轻放易碎物（2 倍速）
+    _record_grasp_demo(app, out, "fragile", 2.0, "demo_fragile")
+
+
+def record_compare(app, out: Path) -> None:
+    # ---------------------------------------------------------------- 6) 演示 4：位置控制 vs 阻抗控制抓球（4 倍速）
+    _record_grasp_demo(app, out, "compare", 4.0, "demo_compare")
 
 
 if __name__ == "__main__":
